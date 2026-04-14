@@ -60,16 +60,17 @@ def fd_speed_kmh(k_lane: float, fd: FDParams) -> float:
     k = max(k_lane, 0.0)
     if k <= 1e-9:
         return float(fd.v_ff_kmh)
+    v_by_cap = fd.q_max_vph_lane / k
     k_free = fd.q_max_vph_lane / max(fd.v_ff_kmh, 1e-9)
     if k <= k_free + 1e-12:
-        return float(fd.v_ff_kmh)
+        return float(min(fd.v_ff_kmh, v_by_cap))
     if k >= fd.k_jam_vpk_lane - 1e-12:
         return 0.0
     v_cong = fd.w_kmh * (fd.k_jam_vpk_lane / k - 1.0)
-    return float(max(0.0, min(fd.v_ff_kmh, v_cong)))
+    return float(max(0.0, min(fd.v_ff_kmh, v_cong, v_by_cap)))
 
 
 def fd_flow_lane(k_lane: float, fd: FDParams) -> float:
     """Per-lane flow q(k) consistent with fd_speed (veh/h/lane)."""
     v = fd_speed_kmh(k_lane, fd)
-    return float(k_lane * v)
+    return float(min(k_lane * v, fd.q_max_vph_lane))

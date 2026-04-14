@@ -46,11 +46,18 @@ def _sync_ramp_session(layout_key: str, geom_base) -> None:
         st.session_state["_ramp_layout_key"] = layout_key
         st.session_state["custom_on_cells"] = set(geom_base.on_ramp_cells)
         st.session_state["custom_off_cells"] = set(geom_base.off_ramp_cells)
+        st.session_state["custom_det_cells"] = set(
+            detector_indices(
+                geom_base.n_cells,
+                geom_base.off_ramp_cells,
+                geom_base.on_ramp_cells,
+            )
+        )
 
 
 def _render_ramp_cell_buttons(n_cells: int, layout_key: str) -> None:
     """셀마다 ON / OFF 토글: 켜진 항목 다시 누르면 해제. ON과 OFF 동시 불가."""
-    ncols = min(8, max(1, n_cells))
+    ncols = min(5, max(1, n_cells))
     for row0 in range(0, n_cells, ncols):
         cols = st.columns(ncols)
         for j in range(ncols):
@@ -60,16 +67,18 @@ def _render_ramp_cell_buttons(n_cells: int, layout_key: str) -> None:
             with cols[j]:
                 on_act = i in st.session_state["custom_on_cells"]
                 off_act = i in st.session_state["custom_off_cells"]
-                st.caption(f"셀 {i}")
+                st.markdown(f"**Cell {i}**")
                 b_on = st.button(
                     "ON",
                     key=f"rpon_{layout_key}_{i}",
                     type="primary" if on_act else "secondary",
+                    use_container_width=True,
                 )
                 b_off = st.button(
                     "OFF",
                     key=f"rpoff_{layout_key}_{i}",
                     type="primary" if off_act else "secondary",
+                    use_container_width=True,
                 )
                 if b_on:
                     s_on = set(st.session_state["custom_on_cells"])
@@ -95,6 +104,34 @@ def _render_ramp_cell_buttons(n_cells: int, layout_key: str) -> None:
                     st.rerun()
 
 
+def _render_detector_cell_buttons(n_cells: int, layout_key: str) -> None:
+    """Toggle detector cells."""
+    ncols = min(5, max(1, n_cells))
+    for row0 in range(0, n_cells, ncols):
+        cols = st.columns(ncols)
+        for j in range(ncols):
+            i = row0 + j
+            if i >= n_cells:
+                break
+            with cols[j]:
+                active = i in st.session_state["custom_det_cells"]
+                st.markdown(f"**Cell {i}**")
+                clicked = st.button(
+                    "Detector",
+                    key=f"det_{layout_key}_{i}",
+                    type="primary" if active else "secondary",
+                    use_container_width=True,
+                )
+                if clicked:
+                    s_det = set(st.session_state["custom_det_cells"])
+                    if i in s_det:
+                        s_det.discard(i)
+                    else:
+                        s_det.add(i)
+                    st.session_state["custom_det_cells"] = s_det
+                    st.rerun()
+
+
 # 네트워크 도식: 한 줄에 전체 셀 균등 배치(가로 스크롤 없음)
 _DIAGRAM_GAP_PX = 6
 _DIAGRAM_CELL_H_PX = 92
@@ -102,76 +139,157 @@ _DIAGRAM_CELL_H_PX = 92
 
 def _network_diagram_html(
     n_cells: int,
+    n_lanes: int,
     on_cells: frozenset[int],
     off_cells: frozenset[int],
     detector_cells: frozenset[int],
     accident_cells: frozenset[int],
 ) -> str:
-    """가로 셀 도식(흰 배경): 한 화면에 균등 너비로 전체 표시, 가로 스크롤 없음."""
-    gap = _DIAGRAM_GAP_PX
-    cell_h = _DIAGRAM_CELL_H_PX
+    """예시 이미지 스타일에 가까운 선/도형 기반 네트워크 SVG."""
+    if n_cells <= 0:
+        return '<div style="padding:12px;color:#475569;">No cells to display.</div>'
+
+    cell_w = 112.0
+    cell_h = 64.0
+    gap = float(_DIAGRAM_GAP_PX)
+    left_pad = 24.0
+    right_pad = 24.0
+    top_pad = 54.0
+    ramp_len = 42.0
+    ramp_w = 28.0
+    lane_lines = max(int(n_lanes) - 1, 0)
+    svg_w = left_pad + right_pad + n_cells * cell_w + max(0.0, (n_cells - 1) * gap)
+    svg_h = top_pad + cell_h + 96.0
+
+    def cx_of(idx: int) -> float:
+        return left_pad + idx * (cell_w + gap) + 0.5 * cell_w
+
     parts: list[str] = []
     parts.append(
-        '<div style="background:#ffffff;border-radius:12px;padding:12px 14px 16px;'
-        'border:1px solid #e2e8f0;box-sizing:border-box;width:100%;">'
+        '<div style="background:#ffffff;border-radius:14px;padding:10px 14px 14px;'
+        'border:1px solid #dbe4f0;box-sizing:border-box;width:100%;">'
     )
     parts.append(
-        '<p style="margin:0 0 10px 0;color:#334155;font-size:13px;line-height:1.55;">'
-        '<span style="color:#15803d;font-weight:700;">━</span> 녹색 테두리 = ON 램프 · '
-        '<span style="color:#0e7490;font-weight:700;">━</span> 청록 테두리 = OFF 램프 · '
-        '<span style="color:#ca8a04;font-weight:700;">●</span> 노란 점 = 검지기 · '
-        '<span style="color:#dc2626;font-weight:700;">▣</span> 붉은 음영 = 사고 (선택 시)</p>'
+        '<p style="margin:0 0 8px 0;color:#334155;font-size:13px;line-height:1.5;">'
+        '<span style="color:#16a34a;font-weight:700;">ON</span> ramp · '
+        '<span style="color:#0ea5e9;font-weight:700;">OFF</span> ramp · '
+        '<span style="color:#ca8a04;font-weight:700;">●</span> detector · '
+        '<span style="color:#dc2626;font-weight:700;">⚠</span> incident cell'
+        '</p>'
     )
     parts.append(
-        f'<div style="display:flex;flex-direction:row;flex-wrap:nowrap;gap:{gap}px;'
-        'width:100%;box-sizing:border-box;min-width:0;">'
+        f'<svg viewBox="0 0 {svg_w:.1f} {svg_h:.1f}" width="100%" '
+        'style="display:block;overflow:visible;">'
     )
+    parts.append(
+        '<defs>'
+        '<linearGradient id="roadBand" x1="0" y1="0" x2="0" y2="1">'
+        '<stop offset="0%" stop-color="#f8fbff"/>'
+        '<stop offset="100%" stop-color="#edf3fb"/>'
+        '</linearGradient>'
+        '</defs>'
+    )
+
+    y0 = top_pad
+    # 도로 배경 밴드
+    parts.append(
+        f'<rect x="{left_pad - 8:.1f}" y="{y0 - 8:.1f}" width="{svg_w - left_pad - right_pad + 16:.1f}" '
+        f'height="{cell_h + 16:.1f}" rx="10" fill="url(#roadBand)" stroke="#d7e3f4" stroke-width="1.2"/>'
+    )
+
+    # 셀 박스와 내부 차선
     for i in range(n_cells):
-        is_on = i in on_cells
-        is_off = i in off_cells
-        is_det = i in detector_cells
+        x = left_pad + i * (cell_w + gap)
         is_acc = i in accident_cells
-        bg = "rgba(254,202,202,0.95)" if is_acc else "#f8fafc"
-        if is_on and is_off:
-            border = "3px solid #a855f7"
-        elif is_on:
-            border = "3px solid #16a34a"
-        elif is_off:
-            border = "3px solid #0891b2"
-        else:
-            border = "1px solid #cbd5e1"
-        det_html = ""
-        if is_det:
-            det_html = (
-                '<div style="position:absolute;top:6px;left:50%;transform:translateX(-50%);'
-                'width:10px;height:10px;background:#eab308;border-radius:50%;'
-                'box-shadow:0 0 0 1px rgba(0,0,0,0.15);"></div>'
-            )
+        stroke = "#dc2626" if is_acc else "#1f2937"
+        stroke_w = 2.8 if is_acc else 2.1
         parts.append(
-            f'<div style="position:relative;flex:1 1 0;min-width:0;height:{cell_h}px;'
-            f"border-radius:10px;background:{bg};border:{border};box-sizing:border-box;\">"
-            f"{det_html}"
-            '<div style="position:absolute;bottom:8px;left:0;right:0;text-align:center;'
-            'font-size:clamp(11px,2.6vw,15px);font-weight:700;color:#0f172a;'
-            'font-family:system-ui,sans-serif;overflow:hidden;text-overflow:ellipsis;">'
-            f"{i}</div></div>"
+            f'<rect x="{x:.1f}" y="{y0:.1f}" width="{cell_w:.1f}" height="{cell_h:.1f}" '
+            f'rx="3" fill="none" stroke="{stroke}" stroke-width="{stroke_w:.1f}"/>'
         )
-    parts.append("</div></div>")
+        if lane_lines > 0:
+            for ln in range(1, lane_lines + 1):
+                yy = y0 + ln * (cell_h / (lane_lines + 1))
+                parts.append(
+                    f'<line x1="{x + 2:.1f}" y1="{yy:.1f}" x2="{x + cell_w - 2:.1f}" y2="{yy:.1f}" '
+                    'stroke="#93b5de" stroke-width="1.7" stroke-dasharray="8 5"/>'
+                )
+        parts.append(
+            f'<text x="{x + 0.5*cell_w:.1f}" y="{y0 + cell_h + 19:.1f}" text-anchor="middle" '
+            'font-size="13" font-weight="700" fill="#0f172a">'
+            f'{i}</text>'
+        )
+        if is_acc:
+            parts.append(
+                f'<text x="{x + 0.5*cell_w:.1f}" y="{y0 - 10:.1f}" text-anchor="middle" '
+                'font-size="14" font-weight="700" fill="#dc2626">⚠</text>'
+            )
+
+    # 검지기
+    for i in detector_cells:
+        if not (0 <= i < n_cells):
+            continue
+        cx = cx_of(i)
+        cy = y0 + 8
+        parts.append(f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="4.5" fill="#eab308" stroke="#a16207" stroke-width="1"/>')
+
+    # 램프(요청하신 그림 느낌의 사선 가지)
+    for i in on_cells:
+        if not (0 <= i < n_cells):
+            continue
+        cx = cx_of(i)
+        join_x = cx - 8
+        join_y = y0 + cell_h - 2
+        p2x = join_x - ramp_len
+        p2y = join_y + 26
+        p3x = p2x - ramp_len
+        p3y = p2y + 22
+        parts.append(
+            f'<polyline points="{join_x:.1f},{join_y:.1f} {p2x:.1f},{p2y:.1f} {p3x:.1f},{p3y:.1f}" '
+            'fill="none" stroke="#16a34a" stroke-width="2.6"/>'
+        )
+        parts.append(
+            f'<rect x="{p3x - ramp_w*0.5:.1f}" y="{p3y - ramp_w*0.35:.1f}" '
+            f'width="{ramp_w:.1f}" height="{ramp_w*0.7:.1f}" transform="rotate(-32 {p3x:.1f} {p3y:.1f})" '
+            'fill="none" stroke="#0f172a" stroke-width="1.7"/>'
+        )
+
+    for i in off_cells:
+        if not (0 <= i < n_cells):
+            continue
+        cx = cx_of(i)
+        join_x = cx + 8
+        join_y = y0 + cell_h - 2
+        p2x = join_x + ramp_len
+        p2y = join_y + 26
+        p3x = p2x + ramp_len
+        p3y = p2y + 22
+        parts.append(
+            f'<polyline points="{join_x:.1f},{join_y:.1f} {p2x:.1f},{p2y:.1f} {p3x:.1f},{p3y:.1f}" '
+            'fill="none" stroke="#0ea5e9" stroke-width="2.6"/>'
+        )
+        parts.append(
+            f'<rect x="{p3x - ramp_w*0.5:.1f}" y="{p3y - ramp_w*0.35:.1f}" '
+            f'width="{ramp_w:.1f}" height="{ramp_w*0.7:.1f}" transform="rotate(32 {p3x:.1f} {p3y:.1f})" '
+            'fill="none" stroke="#0f172a" stroke-width="1.7"/>'
+        )
+
+    parts.append("</svg></div>")
     return "".join(parts)
 
 
-def _network_diagram_iframe(html_fragment: str, n_cells: int) -> None:
+def _network_diagram_iframe(html_fragment: str, n_cells: int, height: int | None = None) -> None:
     """Streamlit markdown은 flex/HTML이 깨지는 경우가 있어 iframe으로 렌더."""
     doc = (
         "<!DOCTYPE html><html><head>"
         '<meta charset="utf-8"/>'
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"/>"
         "<style>html,body{margin:0;padding:0;background:#ffffff;overflow-x:hidden;}"
-        "body{padding:4px 6px 8px;box-sizing:border-box;width:100%;}</style></head><body>"
+        "body{padding:4px 6px 8px;box-sizing:border-box;width:100%;}"
+        "svg{width:100% !important;height:auto;display:block;}</style></head><body>"
         f"{html_fragment}</body></html>"
     )
-    est_h = max(240, min(560, 150 + _DIAGRAM_CELL_H_PX + 36))
-    # width=None → 컨테이너 너비에 맞춤(가로 스크롤 없이 한 줄)
+    est_h = height if height is not None else max(360, min(760, 240 + _DIAGRAM_CELL_H_PX + 72))
     components.html(doc, width=None, height=est_h, scrolling=False)
 
 
@@ -223,7 +341,7 @@ def _heatmap(
     fig.update_layout(
         title=title,
         xaxis_title="Time (min)",
-        yaxis_title="거리 (km, 0 = 상류·아래)",
+        yaxis_title="Distance (km, 0 = upstream at bottom)",
         height=420,
         margin=dict(l=60, r=20, t=50, b=50),
     )
@@ -232,8 +350,8 @@ def _heatmap(
 
 
 def main() -> None:
-    st.set_page_config(page_title="CTM 시뮬레이터", layout="wide")
-    st.title("CTM 웹 시뮬레이터 (Daganzo식)")
+    st.set_page_config(page_title="CTM Simulator", layout="wide")
+    st.title("CTM Simulator")
 
     od_path = ROOT / "data" / "od_network.json"
     links = load_network_json(od_path)
@@ -249,30 +367,26 @@ def main() -> None:
     st.session_state.setdefault("peak_windows_text", "60-120")
 
     with st.sidebar:
-        st.header("상수 (per lane)")
-        dt_min = st.number_input("dt (분)", min_value=0.5, max_value=60.0, value=5.0, step=0.5)
+        st.header("Parameters (per lane)")
+        dt_min = st.number_input("dt (min)", min_value=0.5, max_value=60.0, value=5.0, step=0.5)
         v_ff = st.number_input("v_ff (km/h)", min_value=10.0, value=100.0, step=5.0)
         w = st.number_input("w (km/h)", min_value=1.0, value=15.0, step=1.0)
         q_max = st.number_input("q_max (veh/h/lane)", min_value=100.0, value=2000.0, step=100.0)
         k_jam = st.number_input("k_jam (veh/km/lane)", min_value=10.0, value=200.0, step=5.0)
-        n_lanes = st.slider("레인 수", min_value=1, max_value=8, value=3, step=1)
-        beta = st.slider("Off-ramp 분기율 β", min_value=0.0, max_value=0.99, value=0.1, step=0.01)
-        t_horizon_min = st.number_input("시뮬 시간 (분)", min_value=10.0, value=180.0, step=10.0)
+        n_lanes = st.slider("Number of lanes", min_value=1, max_value=8, value=3, step=1)
+        beta = st.slider("Off-ramp split ratio β", min_value=0.0, max_value=0.99, value=0.1, step=0.01)
+        t_horizon_min = st.number_input("Simulation horizon (min)", min_value=10.0, value=1000.0, step=10.0)
 
         q_cap = _q_cap_total(q_max, n_lanes)
-        st.caption(f"총 도로 용량 상한(참고): q_max×레인 ≈ {q_cap:.0f} veh/h")
+        st.caption(f"Mainline capacity cap: q_max × lanes ≈ {q_cap:.0f} veh/h")
 
         st.divider()
-        st.subheader("수요 (veh/h)")
+        st.subheader("Demand (veh/h)")
         up_max_off = max(q_cap * 0.999, 1.0)
         ramp_max_off = max(q_cap * 0.999, 1.0)
         up_max_pk = max(q_cap * 2.5, q_cap + 100.0)
         ramp_max_pk = max(q_cap * 2.5, q_cap + 100.0)
-        st.caption(
-            "Off-peak·Peak 유량을 각각 설정합니다. 시뮬은 **끊김 없이 누적**되며, "
-            "아래 Peak 구간(닫힌 구간) 중 **어느 하나에라도** 속할 때만 Peak 유량이 적용됩니다."
-        )
-        if st.button("수요 기본값 (Off 4500/750, Peak 6000/1200, 구간 60–120분)"):
+        if st.button("Reset demand defaults (Off 4500/750, Peak 6000/1200, window 60-120 min)"):
             st.session_state["q_off_up"] = 4500.0
             st.session_state["q_off_r"] = 750.0
             st.session_state["q_pk_up"] = 6000.0
@@ -280,7 +394,7 @@ def main() -> None:
             st.session_state["peak_windows_text"] = "60-120"
             st.rerun()
 
-        st.markdown("**Off-peak** (그 외 시간)")
+        st.markdown("**Off-peak**")
         q_off_up = st.slider(
             "Off-peak upstream",
             0.0,
@@ -298,9 +412,9 @@ def main() -> None:
             key="q_off_r",
         )
         if q_off_up >= q_cap - 1e-6 or q_off_r >= q_cap - 1e-6:
-            st.warning("Off-peak는 q_max×레인 **미만**이 되도록 조절하세요.")
+            st.warning("Set off-peak values below q_max × lanes.")
 
-        st.markdown("**Peak** (지정 구간만)")
+        st.markdown("**Peak**")
         q_pk_up = st.slider(
             "Peak upstream",
             0.0,
@@ -318,19 +432,19 @@ def main() -> None:
             key="q_pk_r",
         )
 
-        st.markdown("**Peak 구간 (분, 닫힌 구간)** · 스텝 시작 `t = k·dt`")
+        st.markdown("**Peak windows (min, closed interval)** · step start `t = k·dt`")
         st.session_state.setdefault("peak_windows_text", "60-120")
         peak_windows_text = st.text_input(
-            "구간 목록 (쉼표로 구분, 각 구간은 시작-끝)",
+            "Window list (comma-separated, each as start-end)",
             key="peak_windows_text",
-            help="예: 60-120 또는 60-120, 180-220 (여러 피크)",
+            help="Example: 60-120 or 60-120, 180-220",
         )
         peak_windows = parse_peak_windows(peak_windows_text)
         if not peak_windows:
-            st.info("구간이 비어 있으면 전 시간 Off-peak 유량만 사용됩니다.")
+            st.info("No peak window: off-peak demand is used for all times.")
         else:
             parts = [f"{lo:g}–{hi:g}" for lo, hi in peak_windows]
-            st.caption(f"Peak 적용: **t ∈** " + " **∪** ".join(parts) + " 분 · 그 외 Off-peak (상태 연속)")
+            st.caption(f"Peak active for **t ∈** " + " **∪** ".join(parts) + " min")
 
     fd = FDParams(v_ff_kmh=v_ff, w_kmh=w, q_max_vph_lane=q_max, k_jam_vpk_lane=k_jam)
 
@@ -338,44 +452,56 @@ def main() -> None:
     accident_cells_for_diagram: frozenset[int] = frozenset()
     col_net, col_run = st.columns((1, 2))
     with col_net:
-        st.subheader("네트워크")
-        od_id = st.selectbox("OD 선택", od_ids, index=0)
+        st.subheader("Network")
+        od_id = st.selectbox("OD", od_ids, index=0)
         link = find_link(links, od_id)
-        st.caption(f"{link.name} · 거리 {link.distance_km:g} km")
+        st.caption(f"{link.name} · distance {link.distance_km:g} km")
 
         geom_base = build_geometry(link, v_ff_kmh=v_ff, dt_hours=dt_min / 60.0)
         rk = _ramp_layout_key(od_id, geom_base)
         _sync_ramp_session(rk, geom_base)
+        st.session_state.setdefault(
+            "custom_det_cells",
+            set(detector_indices(geom_base.n_cells, geom_base.off_ramp_cells, geom_base.on_ramp_cells)),
+        )
         geom = geometry_with_ramps(
             geom_base,
             tuple(st.session_state["custom_on_cells"]),
             tuple(st.session_state["custom_off_cells"]),
         )
 
-        st.metric("셀 길이 (km)", f"{geom.cell_len_km:.4f}")
-        st.metric("셀 개수", geom.n_cells)
+        st.metric("Cell length (km)", f"{geom.cell_len_km:.4f}")
+        st.metric("Number of cells", geom.n_cells)
         st.caption(
-            f"OFF 램프 셀: {list(geom.off_ramp_cells)} · ON 램프 셀: {list(geom.on_ramp_cells)}"
+            f"OFF-ramp cells: {list(geom.off_ramp_cells)} · ON-ramp cells: {list(geom.on_ramp_cells)}"
         )
 
-        with st.expander("램프 위치 (셀별 ON / OFF, 같은 버튼 다시 누르면 해제)", expanded=False):
-            st.caption(
-                "한 셀에는 ON 또는 OFF만 가능합니다. ON을 켜면 해당 셀의 OFF는 꺼지고, 그 반대도 같습니다."
-            )
-            if st.button("10셀 자동 규칙으로 램프 초기화", key=f"ramp_auto_reset_{rk}"):
+        with st.expander("Ramp locations", expanded=False):
+            if st.button("Reset ramps by 10-cell rule", key=f"ramp_auto_reset_{rk}"):
                 off_a, on_a = ramp_indices_for_length(geom_base.n_cells)
                 st.session_state["custom_on_cells"] = set(on_a)
                 st.session_state["custom_off_cells"] = set(off_a)
                 st.rerun()
             _render_ramp_cell_buttons(geom.n_cells, rk)
 
-        st.subheader("사고 설정 + 네트워크 도식")
-        with st.expander("사고 이벤트 설정 (접기/펼치기)", expanded=False):
-            st.caption("아래 사고 설정은 **시뮬레이션에 실제 반영**됩니다. (해당 셀 유효 레인 감소)")
-            use_accident = st.checkbox("사고 이벤트 적용(시뮬 반영)", value=False, key=f"use_accident_{rk}")
+        with st.expander("Detector locations", expanded=False):
+            if st.button("Reset detectors to default", key=f"det_reset_{rk}"):
+                st.session_state["custom_det_cells"] = set(
+                    detector_indices(
+                        geom.n_cells,
+                        st.session_state["custom_off_cells"],
+                        st.session_state["custom_on_cells"],
+                    )
+                )
+                st.rerun()
+            _render_detector_cell_buttons(geom.n_cells, rk)
+
+        st.subheader("Incidents")
+        with st.expander("Incident events", expanded=False):
+            use_accident = st.checkbox("Enable incidents", value=False, key=f"use_accident_{rk}")
             if use_accident:
                 n_acc = st.number_input(
-                    "사고 건수",
+                    "Number of incidents",
                     min_value=1,
                     max_value=5,
                     value=1,
@@ -384,16 +510,16 @@ def main() -> None:
                 )
                 events: list[AccidentSpec] = []
                 for j in range(int(n_acc)):
-                    st.markdown(f"**사고 #{j + 1}**")
+                    st.markdown(f"**Incident #{j + 1}**")
                     acc_cell = st.selectbox(
-                        f"사고 위치 셀 #{j + 1}",
+                        f"Incident cell #{j + 1}",
                         options=list(range(geom.n_cells)),
                         index=min(geom.n_cells - 1, geom.n_cells // 2),
-                        format_func=lambda i: f"셀 {i}",
+                        format_func=lambda i: f"Cell {i}",
                         key=f"acc_cell_{rk}_{j}",
                     )
                     acc_start = st.number_input(
-                        f"사고 시작 시각 #{j + 1} (분)",
+                        f"Start time #{j + 1} (min)",
                         min_value=0.0,
                         max_value=float(t_horizon_min),
                         value=min(60.0, float(t_horizon_min)),
@@ -401,7 +527,7 @@ def main() -> None:
                         key=f"acc_start_{rk}_{j}",
                     )
                     acc_duration = st.number_input(
-                        f"사고 지속 시간 #{j + 1} (분)",
+                        f"Duration #{j + 1} (min)",
                         min_value=0.0,
                         max_value=float(t_horizon_min),
                         value=30.0,
@@ -409,7 +535,7 @@ def main() -> None:
                         key=f"acc_dur_{rk}_{j}",
                     )
                     acc_blocked = st.slider(
-                        f"막힌 레인 수 #{j + 1}",
+                        f"Blocked lanes #{j + 1}",
                         min_value=1,
                         max_value=max(int(n_lanes), 1),
                         value=min(1, int(n_lanes)),
@@ -426,28 +552,16 @@ def main() -> None:
                     )
                 accident_events = tuple(events)
                 accident_cells_for_diagram = frozenset(ev.cell_idx for ev in accident_events)
-                st.success(f"적용 예정 사고 {len(accident_events)}건")
+                st.success(f"{len(accident_events)} incident(s) configured.")
                 for j, ev in enumerate(accident_events, start=1):
                     st.caption(
-                        f"#{j}: 셀 {ev.cell_idx}, 시작 {ev.start_min:g}분, "
-                        f"지속 {ev.duration_min:g}분, 차단 {ev.blocked_lanes}개 차로"
+                        f"#{j}: Cell {ev.cell_idx}, start {ev.start_min:g} min, "
+                        f"duration {ev.duration_min:g} min, blocked lanes {ev.blocked_lanes}"
                     )
 
         on_set = frozenset(geom.on_ramp_cells)
         off_set = frozenset(geom.off_ramp_cells)
-        det_set = frozenset(
-            detector_indices(geom.n_cells, geom.off_ramp_cells, geom.on_ramp_cells)
-        )
-        _network_diagram_iframe(
-            _network_diagram_html(
-                geom.n_cells,
-                on_set,
-                off_set,
-                det_set,
-                accident_cells_for_diagram,
-            ),
-            geom.n_cells,
-        )
+        det_set = frozenset(st.session_state.get("custom_det_cells", set()))
 
     n_steps = max(int(t_horizon_min / dt_min), 1)
     cfg = SimulationConfig(
@@ -466,27 +580,61 @@ def main() -> None:
     )
 
     with col_run:
-        st.subheader("실행")
-        st.caption("사이드바·OD 설정이 바뀌면 매 렌더마다 CTM을 다시 계산합니다.")
+        st.subheader("Run")
+        run_clicked = st.button("Run Simulation", type="primary", use_container_width=True)
         if accident_events:
-            st.caption(f"사고 반영 중: 총 {len(accident_events)}건")
+            st.caption(f"Incidents active: {len(accident_events)}")
             for j, a in enumerate(accident_events, start=1):
                 st.caption(
-                    f"#{j} 셀 {a.cell_idx}, {a.start_min:g}~{(a.start_min + a.duration_min):g}분, "
-                    f"차단 차로 {a.blocked_lanes}"
+                    f"#{j} Cell {a.cell_idx}, {a.start_min:g}~{(a.start_min + a.duration_min):g} min, "
+                    f"blocked lanes {a.blocked_lanes}"
                 )
         else:
-            st.caption("사고 이벤트 없음")
+            st.caption("No incidents")
 
-    res = run_simulation(cfg)
-    fd_state = fd
+    st.subheader("Network diagram")
+    _network_diagram_iframe(
+        _network_diagram_html(
+            geom.n_cells,
+            int(n_lanes),
+            on_set,
+            off_set,
+            det_set,
+            accident_cells_for_diagram,
+        ),
+        geom.n_cells,
+    )
+
+    if run_clicked:
+        st.session_state["last_run_result"] = run_simulation(cfg)
+        st.session_state["last_run_cfg"] = cfg
+        st.session_state["last_run_meta"] = {
+            "od_id": od_id,
+            "n_lanes": int(n_lanes),
+            "q_max": float(q_max),
+            "v_ff": float(v_ff),
+            "w": float(w),
+            "beta": float(beta),
+            "t_horizon_min": float(t_horizon_min),
+            "dt_min": float(dt_min),
+            "peak_windows_text": str(peak_windows_text),
+            "incidents": len(accident_events),
+        }
+
+    if "last_run_result" not in st.session_state:
+        st.info("Set parameters and click 'Run Simulation'.")
+        return
+
+    res = st.session_state["last_run_result"]
+    fd_state = st.session_state["last_run_cfg"].fd
+    run_meta = st.session_state.get("last_run_meta", {})
 
     k = res.k_lane
     v = res.v_kmh
     st.plotly_chart(
         _heatmap(
             k,
-            "밀도 k (veh/km/lane)",
+            "Density k (veh/km/lane)",
             dt_min,
             geom.cell_len_km,
             zmin=0.0,
@@ -498,7 +646,7 @@ def main() -> None:
     st.plotly_chart(
         _heatmap(
             v,
-            "속도 v (km/h)",
+            "Speed v (km/h)",
             dt_min,
             geom.cell_len_km,
             zmin=0.0,
@@ -508,7 +656,7 @@ def main() -> None:
         use_container_width=True,
     )
 
-    st.subheader("FD (전체 시뮬레이션)")
+    st.subheader("FD (Full simulation)")
     ks_th, vs_th, qs_th = fd_theory_curve(fd_state, n=200)
     k_flat, v_flat = fd_scatter_points(k, v)
     q_flat = k_flat * v_flat
@@ -520,11 +668,11 @@ def main() -> None:
             y=v_flat,
             mode="markers",
             marker=dict(size=4, opacity=0.25),
-            name="시뮬 산점",
+            name="Simulation points",
         )
     )
     fig_fd.add_trace(
-        go.Scatter(x=ks_th, y=vs_th, mode="lines", name="이론 v(k)")
+        go.Scatter(x=ks_th, y=vs_th, mode="lines", name="Theory v(k)")
     )
     fig_fd.update_layout(
         xaxis_title="k (veh/km/lane)",
@@ -541,10 +689,10 @@ def main() -> None:
             y=q_flat,
             mode="markers",
             marker=dict(size=4, opacity=0.25),
-            name="시뮬 산점 q=kv",
+            name="Simulation points q=kv",
         )
     )
-    fig_qk.add_trace(go.Scatter(x=ks_th, y=qs_th, mode="lines", name="이론 q(k)"))
+    fig_qk.add_trace(go.Scatter(x=ks_th, y=qs_th, mode="lines", name="Theory q(k)"))
     fig_qk.update_layout(
         xaxis_title="k (veh/km/lane)",
         yaxis_title="q (veh/h/lane)",
@@ -553,7 +701,60 @@ def main() -> None:
     )
     st.plotly_chart(fig_qk, use_container_width=True)
 
-    st.subheader("FD analysis (혼잡 구간)")
+    st.subheader("FD (Detector cells only)")
+    det_idx = sorted(int(i) for i in det_set if 0 <= int(i) < geom.n_cells)
+    if len(det_idx) == 0:
+        st.info("No detector cell selected.")
+    else:
+        k_det = k[:, det_idx]
+        v_det = v[:, det_idx]
+        k_det_flat = k_det.reshape(-1)
+        v_det_flat = v_det.reshape(-1)
+        q_det_flat = k_det_flat * v_det_flat
+
+        fig_fd_det = go.Figure()
+        fig_fd_det.add_trace(
+            go.Scatter(
+                x=k_det_flat,
+                y=v_det_flat,
+                mode="markers",
+                marker=dict(size=4, opacity=0.3),
+                name="Detector points",
+            )
+        )
+        fig_fd_det.add_trace(
+            go.Scatter(x=ks_th, y=vs_th, mode="lines", name="Theory v(k)")
+        )
+        fig_fd_det.update_layout(
+            xaxis_title="k (veh/km/lane)",
+            yaxis_title="v (km/h)",
+            height=420,
+            legend=dict(orientation="h"),
+        )
+        st.plotly_chart(fig_fd_det, use_container_width=True)
+
+        fig_qk_det = go.Figure()
+        fig_qk_det.add_trace(
+            go.Scatter(
+                x=k_det_flat,
+                y=q_det_flat,
+                mode="markers",
+                marker=dict(size=4, opacity=0.3),
+                name="Detector points q=kv",
+            )
+        )
+        fig_qk_det.add_trace(
+            go.Scatter(x=ks_th, y=qs_th, mode="lines", name="Theory q(k)")
+        )
+        fig_qk_det.update_layout(
+            xaxis_title="k (veh/km/lane)",
+            yaxis_title="q (veh/h/lane)",
+            height=420,
+            legend=dict(orientation="h"),
+        )
+        st.plotly_chart(fig_qk_det, use_container_width=True)
+
+    st.subheader("FD analysis (congested subset)")
     k_free = fd_state.q_max_vph_lane / max(fd_state.v_ff_kmh, 1e-9)
     mask = (v_flat < 0.9 * fd_state.v_ff_kmh) | (k_flat > k_free * 1.05)
     k_c = k_flat[mask]
@@ -566,12 +767,12 @@ def main() -> None:
             y=v_c,
             mode="markers",
             marker=dict(size=5, opacity=0.35),
-            name="혼잡 v-k",
+            name="Congested v-k",
         )
     )
-    fig_fda.add_trace(go.Scatter(x=ks_th, y=vs_th, mode="lines", name="이론 v(k)"))
+    fig_fda.add_trace(go.Scatter(x=ks_th, y=vs_th, mode="lines", name="Theory v(k)"))
     fig_fda.update_layout(
-        title="v–k (혼잡 필터: v<0.9·v_ff 또는 k>1.05·k_free)",
+        title="v-k (filter: v < 0.9*v_ff or k > 1.05*k_free)",
         xaxis_title="k (veh/km/lane)",
         yaxis_title="v (km/h)",
         height=420,
@@ -585,17 +786,105 @@ def main() -> None:
             y=q_c,
             mode="markers",
             marker=dict(size=5, opacity=0.35),
-            name="혼잡 q-k",
+            name="Congested q-k",
         )
     )
-    fig_fda2.add_trace(go.Scatter(x=ks_th, y=qs_th, mode="lines", name="이론 q(k)"))
+    fig_fda2.add_trace(go.Scatter(x=ks_th, y=qs_th, mode="lines", name="Theory q(k)"))
     fig_fda2.update_layout(
-        title="q–k (동일 필터)",
+        title="q-k (same filter)",
         xaxis_title="k (veh/km/lane)",
         yaxis_title="q (veh/h/lane)",
         height=420,
     )
     st.plotly_chart(fig_fda2, use_container_width=True)
+
+    # Whole-simulation summary metrics (exclude empty cells where k=0 / x=0)
+    occupied_mask_all = res.x > 1e-9
+    nonff_mask_all = occupied_mask_all & (v < 0.99 * float(fd_state.v_ff_kmh))
+    congested_mask_all = occupied_mask_all & (
+        (v < 0.8 * float(fd_state.v_ff_kmh)) | (k > 1.05 * k_free)
+    )
+
+    occupied_cells = int(np.sum(occupied_mask_all))
+    total_cells = int(geom.n_cells)
+    congested_cells = int(np.sum(congested_mask_all))
+    congestion_ratio_cells = (congested_cells / occupied_cells) if occupied_cells > 0 else 0.0
+
+    veh_total_occ = float(np.sum(res.x[occupied_mask_all])) if occupied_cells > 0 else 0.0
+    veh_nonff = float(np.sum(res.x[nonff_mask_all])) if np.any(nonff_mask_all) else 0.0
+    delay_vehicle_ratio = (veh_nonff / veh_total_occ) if veh_total_occ > 1e-12 else 0.0
+    if np.any(nonff_mask_all) and veh_nonff > 1e-12:
+        v_nonff = v[nonff_mask_all]
+        w_nonff = res.x[nonff_mask_all]
+        mean_nonff = float(np.average(v_nonff, weights=w_nonff))
+        var_nonff = float(np.average((v_nonff - mean_nonff) ** 2, weights=w_nonff))
+    else:
+        mean_nonff = 0.0
+        var_nonff = 0.0
+
+    st.subheader("Whole-simulation performance summary")
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Congested cell ratio", f"{100.0 * congestion_ratio_cells:.1f}%")
+    m2.metric("Delayed vehicle ratio", f"{100.0 * delay_vehicle_ratio:.1f}%")
+    m3.metric("Mean speed (non-FF)", f"{mean_nonff:.1f} km/h")
+    m4.metric("Speed variance (non-FF)", f"{var_nonff:.1f}")
+
+    if np.any(occupied_mask_all):
+        v_occ = np.where(occupied_mask_all, v, np.inf)
+        flat_idx = int(np.argmin(v_occ))
+        t_idx, c_idx = np.unravel_index(flat_idx, v_occ.shape)
+        worst_speed = float(v[t_idx, c_idx])
+        worst_k = float(k[t_idx, c_idx])
+        t_min_worst = float(t_idx) * float(dt_min)
+        incident_active = any(
+            (int(ac.cell_idx) == int(c_idx))
+            and (float(ac.start_min) <= t_min_worst < float(ac.start_min) + float(ac.duration_min))
+            for ac in cfg.accidents
+        )
+    else:
+        t_idx, c_idx = 0, 0
+        worst_speed = 0.0
+        worst_k = 0.0
+        t_min_worst = 0.0
+        incident_active = False
+
+    st.subheader("Most congested point")
+    w1, w2, w3, w4 = st.columns(4)
+    w1.metric("Cell", f"{c_idx}")
+    w2.metric("Time", f"{t_min_worst:.1f} min")
+    w3.metric("Min speed", f"{worst_speed:.1f} km/h")
+    w4.metric("Incident active", "Yes" if incident_active else "No")
+    st.caption(f"At worst point: k={worst_k:.2f} veh/km/lane, step={t_idx}")
+
+    c_left, c_right = st.columns((2, 3))
+    with c_left:
+        st.markdown("**Run configuration**")
+        st.markdown(
+            f"- OD: `{run_meta.get('od_id', od_id)}`\n"
+            f"- Cells: `{total_cells}`\n"
+            f"- Cell length: `{geom.cell_len_km:.4f} km`\n"
+            f"- Lanes: `{run_meta.get('n_lanes', int(n_lanes))}`\n"
+            f"- q_max: `{run_meta.get('q_max', float(q_max)):.0f} veh/h/lane`\n"
+            f"- v_ff: `{run_meta.get('v_ff', float(v_ff)):.1f} km/h`, w: `{run_meta.get('w', float(w)):.1f} km/h`\n"
+            f"- beta: `{run_meta.get('beta', float(beta)):.2f}`\n"
+            f"- Horizon: `{run_meta.get('t_horizon_min', float(t_horizon_min)):.0f} min`, dt: `{run_meta.get('dt_min', float(dt_min)):.1f} min`\n"
+            f"- Peak windows: `{run_meta.get('peak_windows_text', peak_windows_text) if peak_windows_text else 'none'}`\n"
+            f"- Incidents: `{run_meta.get('incidents', len(accident_events))}`"
+        )
+    with c_right:
+        st.markdown("**Network snapshot**")
+        _network_diagram_iframe(
+            _network_diagram_html(
+                geom.n_cells,
+                int(n_lanes),
+                on_set,
+                off_set,
+                det_set,
+                accident_cells_for_diagram,
+            ),
+            geom.n_cells,
+            height=260,
+        )
 
 
 if __name__ == "__main__":
