@@ -1,0 +1,28 @@
+{
+  "links": [
+    {
+      "od_id": "서울-대전",
+      "name": "서울-대전",
+      "origin": "A",
+      "destination": "B",
+      "distance_km": 150.0
+    },
+    {
+      "od_id": "대전-대구",
+      "name": "대전-대구",
+      "origin": "C",
+      "destination": "D",
+      "distance_km": 80.0
+    },
+    { 
+      "od_id": "서울-부산",
+      "name": "서울-부산",
+      "origin": "E",
+      "destination": "F",
+      "distance_km": 350.0
+
+
+    }
+    
+  ]
+}
