@@ -325,12 +325,26 @@ def _heatmap(
     x_time = np.arange(nt, dtype=float) * y_dt_min
     L = float(cell_len_km)
     y_km = (nx - 1 - np.arange(nx, dtype=float)) * L
+    cell_idx_rows = (nx - 1 - np.arange(nx, dtype=int))
+    y_labels = [f"{yk:.1f} ({ci})" for yk, ci in zip(y_km, cell_idx_rows)]
+    custom_cell = np.repeat(cell_idx_rows[:, None], nt, axis=1)
     hm_kw: dict = dict(
         z=z_plot,
         x=x_time,
         y=y_km,
+        customdata=custom_cell,
+        hovertemplate=(
+            "Time: %{x:.1f} min<br>"
+            "Distance: %{y:.1f} km<br>"
+            "Cell: %{customdata:d}<br>"
+            "Value: %{z:.2f}<extra></extra>"
+        ),
         colorscale=colorscale if colorscale is not None else "Viridis",
-        colorbar=dict(title=title),
+        colorbar=dict(
+            title=dict(text=title, font=dict(color="#111827")),
+            x=1.14,
+            tickfont=dict(color="#111827"),
+        ),
     )
     if zmin is not None:
         hm_kw["zmin"] = float(zmin)
@@ -338,12 +352,39 @@ def _heatmap(
         hm_kw["zmax"] = float(zmax)
     fig = go.Figure(data=go.Heatmap(**hm_kw))
     ymax = max(float((nx - 1) * L), 1e-9)
+    tick_step = max(1, nx // 20)
+    idx = np.arange(0, nx, tick_step, dtype=int)
+    tickvals = y_km[idx]
+    ticktext = [str(int(i)) for i in idx]
     fig.update_layout(
         title=title,
         xaxis_title="Time (min)",
-        yaxis_title="Distance (km, 0 = upstream at bottom)",
-        height=420,
-        margin=dict(l=60, r=20, t=50, b=50),
+        yaxis_title="Distance_km (cell index)",
+        font=dict(color="#111827"),
+        xaxis=dict(tickfont=dict(color="#111827"), title_font=dict(color="#111827")),
+        yaxis=dict(
+            tickfont=dict(color="#111827"),
+            title_font=dict(color="#111827"),
+            tickmode="array",
+            tickvals=tickvals.tolist(),
+            ticktext=[y_labels[i] for i in idx],
+        ),
+        yaxis2=dict(
+            title="Cell index",
+            overlaying="y",
+            side="right",
+            tickmode="array",
+            tickvals=tickvals.tolist(),
+            ticktext=ticktext,
+            showgrid=False,
+            showline=True,
+            ticks="outside",
+            showticklabels=True,
+            tickfont=dict(color="#111827"),
+            title_font=dict(color="#111827"),
+        ),
+        height=390,
+        margin=dict(l=60, r=145, t=50, b=50),
     )
     fig.update_yaxes(autorange=False, range=[0.0, ymax])
     return fig
@@ -352,6 +393,50 @@ def _heatmap(
 def main() -> None:
     st.set_page_config(page_title="CTM Simulator", layout="wide")
     st.title("CTM Simulator")
+
+    # === Editable help panel: AI policy + CTM notes (start) ===
+    st.session_state.setdefault("show_help_panel", False)
+    help_c1, help_c2 = st.columns((1, 5))
+    with help_c1:
+        if st.button("AI/CTM Info", use_container_width=True):
+            st.session_state["show_help_panel"] = not st.session_state["show_help_panel"]
+    with help_c2:
+        st.caption("Open to view/edit AI usage policy and CTM notes.")
+
+    if st.session_state["show_help_panel"]:
+        with st.expander("AI usage policy + CTM algorithm notes", expanded=True):
+            tab_ai, tab_ctm = st.tabs(["AI usage policy", "CTM algorithm"])
+            with tab_ai:
+                st.markdown(
+                    "- 시뮬레이션: 커서 AI 활용, CTM rule, onramp/off ramp 유입량 조절 방법, "
+                    "네트워크 및 램프 생성 로직 제공 후 코드 생성\n"
+                    "- UI: 커서 AI 활용, 웹 내 변수 조절 기능, 결과(diagram, summary 등) "
+                    "기능 및 계산 로직 설명 후 웹페이지 및 UI 생성 코드 생성"
+                )
+            with tab_ctm:
+                st.markdown(
+                    "```python\n"
+                    "# 1) CTM 기본 룰 (셀 단위 보존식)\n"
+                    "S_i = min(x_i, q_max * lanes_i * dt)\n"
+                    "R_i = min(q_max * lanes_i * dt, (w/L) * (N_i - x_i) * dt)\n"
+                    "f_i = min(S_i, R_{i+1})\n"
+                    "x_i(t+1) = x_i(t) + inflow_i - outflow_i\n"
+                    "\n"
+                    "# 2) 유입/유출 및 합류/분기\n"
+                    "# - 상류 경계: boundary demand를 셀 0 유입으로 반영\n"
+                    "# - on-ramp: ramp queue -> sending 계산 후 본선과 merge\n"
+                    "# - merge: (S_main + S_ramp) > R_down 이면 R_down 비율로 비례 배분\n"
+                    "#   f_main, f_ramp = merge_proportional(S_main, S_ramp, R_down)\n"
+                    "# - off-ramp: beta 분기율로 유출량 분리\n"
+                    "#   out_off = beta * y, out_down = (1-beta) * y\n"
+                    "\n"
+                    "# 3) 사고 로직(용량 감소)\n"
+                    "# 사고 시간/위치에 해당하면 blocked_lanes 적용\n"
+                    "lanes_open = max(n_lanes - blocked_lanes, 0)\n"
+                    "# lanes_open으로 S_i, R_i를 계산해 병목/혼잡 전파 반영\n"
+                    "```"
+                )
+    # === Editable help panel: AI policy + CTM notes (end) ===
 
     od_path = ROOT / "data" / "od_network.json"
     links = load_network_json(od_path)
@@ -363,8 +448,8 @@ def main() -> None:
     st.session_state.setdefault("q_off_up", 4500.0)
     st.session_state.setdefault("q_off_r", 750.0)
     st.session_state.setdefault("q_pk_up", 6000.0)
-    st.session_state.setdefault("q_pk_r", 1200.0)
-    st.session_state.setdefault("peak_windows_text", "60-120")
+    st.session_state.setdefault("q_pk_r", 1500.0)
+    st.session_state.setdefault("peak_windows_text", "60-180")
 
     with st.sidebar:
         st.header("Parameters (per lane)")
@@ -386,12 +471,12 @@ def main() -> None:
         ramp_max_off = max(q_cap * 0.999, 1.0)
         up_max_pk = max(q_cap * 2.5, q_cap + 100.0)
         ramp_max_pk = max(q_cap * 2.5, q_cap + 100.0)
-        if st.button("Reset demand defaults (Off 4500/750, Peak 6000/1200, window 60-120 min)"):
+        if st.button("Reset demand defaults (Off 4500/750, Peak 6000/1500, window 60-180 min)"):
             st.session_state["q_off_up"] = 4500.0
             st.session_state["q_off_r"] = 750.0
             st.session_state["q_pk_up"] = 6000.0
-            st.session_state["q_pk_r"] = 1200.0
-            st.session_state["peak_windows_text"] = "60-120"
+            st.session_state["q_pk_r"] = 1500.0
+            st.session_state["peak_windows_text"] = "60-180"
             st.rerun()
 
         st.markdown("**Off-peak**")
